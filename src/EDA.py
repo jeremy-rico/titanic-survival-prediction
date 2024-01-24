@@ -10,7 +10,8 @@ def hist(df, col_name, out_dir):
     plt.close()
 
 def bar(df, col_name, out_dir):
-    sns.countplot(x=col_name, data=df)
+    #Creates count plots grouped by the target variable
+    sns.countplot(data=df, x=col_name, hue='Survived')
     plt.savefig(out_dir / f"bar_{col_name}.jpg")
     plt.close()
     
@@ -49,34 +50,39 @@ def main():
     # Age missing 177 values, will omit missing values
     # Cabin missing 687 values, will omit whole column
 
-    #Class balance
-    pos = df_train[df_train['Survived']==1].shape[0] / df_train.shape[0]
-    neg = 1.0-pos
-    print(f"Class balance: {pos*100:.1f}% survived, {neg*100:.1f}% deceased")
-    
     ####################
     # PLOTS AND CHARTS #
     ####################
 
+    print("Generating charts...")
     #seperate numerical and categorical columns
     df_numerical = df_train[["Age", "Fare", "SibSp", "Parch"]]
-    df_categorical = df_train[["Survived", "Pclass", "Sex", "Cabin", "Embarked"]]
-    
-    # Histograms
+    df_categorical = df_train[["Survived", "Pclass", "Sex", "Embarked"]]
+
+    # Pie chart to examine distribution of target variable
+    target = df_train["Survived"].value_counts().to_frame()
+    target = target.reset_index()
+    plt.pie(target['count'], labels=target['Survived'], autopct='%1.1f%%')
+    plt.title('Target Distribution')
+    plt.savefig(fig_dir / "pie_survived.jpg")
+    plt.close()
+
+    # Histograms of numerical data
     for col in df_numerical.columns:
         hist(df_numerical, col, fig_dir)
 
-    # Bar plots
+    # Bar plots of categorical data
     for col in df_categorical.columns:
         bar(df_categorical, col, fig_dir)
 
-    # Scatter Plot
+    
+    # Scatter Plots
     sns.lmplot(x='Age', y='Fare', data=df_train,
                fit_reg=False, hue='Survived')
     plt.savefig(fig_dir / "scatter_ageXfare.jpg")
     plt.close()
 
-    # Box Plot
+    # Box Plots
     sns.boxplot(data=df_train[["Age","Fare"]])
     plt.savefig(fig_dir / "boxplot_age&fare.jpg")
     plt.close()
