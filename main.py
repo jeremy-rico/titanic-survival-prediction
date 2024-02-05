@@ -96,9 +96,9 @@ def main():
     # NOTES:
     # Could possible remove Parch as it has little effect on survival
 
-    #########################
-    # ALGORITHM EXPERIMENTS #
-    #########################
+    #####################
+    # FEATURE FILTERING #
+    #####################
 
     # A note on metrics:
     # Lets imagine we are a time traveler and we are using this model to determine if someone should be able to board
@@ -107,7 +107,7 @@ def main():
     # False Positive: Someone who was going to survive the disaster was not allowed on the ship, they survive anyways but miss their trip
     # False Negative: We let someone on the boat who will not survive. They die becuase of our poor model
     #
-    # Based on these penalities it is obviously worse to get many false negatives
+    # The penalty for FN is obviously worse than FP
     # Therefore, we will optimize our model for Recall
     
     from sklearn.linear_model import LogisticRegression
@@ -115,6 +115,8 @@ def main():
     from sklearn.ensemble import RandomForestClassifier
     from sklearn.tree import DecisionTreeClassifier
     from sklearn.naive_bayes import GaussianNB
+
+    from xgboost import XGBClassifier
 
     from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, roc_auc_score
     from sklearn.model_selection import train_test_split
@@ -129,7 +131,7 @@ def main():
         y_pred = model.predict(X_test)
 
         def print_scores(alg, y_true, y_pred):
-            print(alg_name)
+            print(f"\n{alg_name}")
             acc = accuracy_score(y_true, y_pred)
             prec = precision_score(y_true, y_pred)
             recall = recall_score(y_true, y_pred)
@@ -146,20 +148,19 @@ def main():
             
         return model
     
-    log_model = modeling(LogisticRegression, 'Logistic Regression', print_scores=True)
+    log_model = modeling(LogisticRegression, 'Logistic Regression')
     # 83% f1 right of the bat not bad
 
-    #####################
-    # FEATURE FILTERING #
-    #####################
     from sklearn.feature_selection import RFECV
     from sklearn.model_selection import StratifiedKFold
     import matplotlib.pyplot as plt
     log = LogisticRegression()
+    metric = "recall"
+    print(f"\nOptimizing feature space for {metric}...")
     rfecv = RFECV(
         estimator=log,
         cv=StratifiedKFold(10, random_state=50, shuffle=True),
-        scoring="accuracy"
+        scoring=metric
     )
     rfecv.fit(X,y)
 
@@ -176,101 +177,97 @@ def main():
     plt.savefig(fig_dir/"RFE.jpg")
     print(f"The optimal number of features: {rfecv.n_features_}")
     # 7 for accuracy
-    # 5 for recall 
-    exit()
+    # 5 for recall
+
+    X_rfe = X.iloc[:, rfecv.support_]
+    dropped = [f for f in X.columns.to_list() if f not in X_rfe.columns.to_list()]
+    print(f"Final training data shape: {X_rfe.shape}")
+    print(f"Dropped the following features: {dropped}")
+
+    #########################
+    # ALGORITHM EXPERIMENTS #
+    #########################
+    log_model = modeling(LogisticRegression, 'Logistic Regression')
     
-    ########################
-    # Initial Observations #
-    ########################
+    svc_model = modeling(SVC, "Support Vector Classifier")
+
+    rf_model = modeling(RandomForestClassifier, "Random Forest Classifier")
+
+    dt_model = modeling(DecisionTreeClassifier, "Decision Tree Classifier")
+
+    nb_model = modeling(GaussianNB, "Naive Bayes")
+
+    gb_model = modeling(XGBClassifier,
+                        "Gradient Boosted Tree",
+                        params={
+                            'n_estimators': 2,
+                            'max_depth': 2,
+                            'learning_rate': 1,
+                            'objective':'binary:logistic',
+                        })
+
+    ##########################
+    # HYPER PARAMETER TUNING #
+    ##########################
+
+    print("\nTuning Hyperparameters...")
+
+    model = RandomForestClassifier()
+    #print(model.get_params())
+      
+    from sklearn.model_selection import RepeatedStratifiedKFold
+    cv = RepeatedStratifiedKFold(n_splits=10, n_repeats = 3, random_state=1)
+
+    from scipy.stats import loguniform
+    param_grid = {
+        'bootstrap': [True, False],
+        'n_estimators': list(range(100, 1800, 200)),
+        'max_depth': list(range(10, 100, 10)),
+        'min_samples_leaf': [1,2,4],
+        'criterion': ['gini', 'entropy', 'log_loss'],
+        #'max_depth': [2, 3, 5, 10, 20],
+        'min_samples_leaf': [5, 10, 20, 50, 100],
+    }
+
+    from sklearn.model_selection import RandomizedSearchCV, GridSearchCV
+    import time
+
+    print("\nPerforming random search")
+    random_start = time.time()
+    search = RandomizedSearchCV(
+        model,
+        param_grid,
+        n_iter=100,
+        scoring=metric,
+        n_jobs = -1,
+        cv = cv,
+        random_state=1
+    )
+    random_result = search.fit(X_rfe, y)
+    random_params = random_result.best_params_
+    print(random_params)
+    print(f"Time elapsed: {time.time()-random_start:.3f} sec")
     
-    print(df_train.head())
-    print(df_train.columns)
-    print(f"NUM SAMPLES: {df_train.shape[0]}")
+    print("\nPerforming exhaustive search")
+    grid_start = time.time()
+    search = GridSearchCV(
+        model,
+        param_grid,
+        scoring=metric,
+        n_jobs = -1,
+        cv = cv,
+    )
+    grid_result = search.fit(X_rfe, y)
+    grid_params = grid_result.best_params_
+    print(grid_params)
+    print(f"Time elapsed: {time.time()-grid_start:.3f} sec")
 
-    # NOTES:
-    # Target column: Survived
-    # Unique value columns: PassengerId, Name, Ticket, Cabin
-
-    print(df_train["Ticket"].unique().shape[0]) #681 unique values, not good for a feature
-
-    # Missing values
-    for col in df_train.columns:
-        not_na = df_train[df_train[col].notna()].shape[0]
-        missing = df_train.shape[0] - not_na
-        print(f"Column {col} missing {missing} values")
-
-    # NOTES:
-    # Age missing 177 values, will omit missing values
-    # Cabin missing 687 values, will omit whole column
-
-    ####################
-    # PLOTS AND CHARTS #
-    ####################
-
-    print("Generating charts...")
-    #seperate numerical and categorical columns
-    df_numerical = df_train[["Age", "Fare", "SibSp", "Parch"]]
-    df_categorical = df_train[["Survived", "Pclass", "Sex", "Embarked"]]
-
-    # Pie chart to examine distribution of target variable
-    target = df_train["Survived"].value_counts().to_frame()
-    target = target.reset_index()
-    plt.pie(target['count'], labels=target['Survived'], autopct='%1.1f%%')
-    plt.title('Target Distribution')
-    plt.savefig(fig_dir / "pie_survived.jpg")
-    plt.close()
-
-    # Histograms of numerical data
-    for col in df_numerical.columns:
-        hist(df_numerical, col, fig_dir)
-
-    # Bar plots of categorical data
-    for col in df_categorical.columns:
-        bar(df_categorical, col, fig_dir)
-
+    final_model = modeling(
+        DecisionTreeClassifier,
+        'Final Decision Tree Model',
+        params = grid_params
+    )
     
-    # Scatter Plots
-    sns.lmplot(x='Age', y='Fare', data=df_train,
-               fit_reg=False, hue='Survived')
-    plt.savefig(fig_dir / "scatter_ageXfare.jpg")
-    plt.close()
 
-    # Box Plots
-    sns.boxplot(data=df_train[["Age","Fare"]])
-    plt.savefig(fig_dir / "boxplot_age&fare.jpg")
-    plt.close()
-
-    #NOTES:
-    # Outlier around 500 fare (guy got ripped off lol)
-    
-    sns.boxplot(data=df_train[["SibSp","Parch"]])
-    #plt.xticks(rotation=-45) #tilt xlabels for readability
-    plt.savefig(fig_dir / "boxplot_sib&par.jpg")
-    plt.close()
-
-    # NOTES:
-    # These two are odd, small distribution with many outliers. Will experiment with to see how useful they are
-
-    # Correlation Heatmap
-    df_stats = df_train.drop(['PassengerId','Survived','Pclass','Name','Sex','Ticket','Cabin','Embarked'], axis=1)
-    corr = df_stats.corr()
-    sns.heatmap(corr)
-    plt.savefig(fig_dir / 'corr_heatmap.jpg')
-    plt.close()
-
-    # NOTES:
-    # No strong correlations found
-
-    ############
-    # FINDINGS #
-    ############
-
-    """
-    Remove rows with missing Age values
-    Remove columns with unique values: PassengerId, Name, Ticket
-    Remove column with too many missing values: Cabin
-    Watch for outliers in Fare and Parch columns
-    Class imbalance: 38.4% survived, 61.6% deceased
-    """
 if __name__ == "__main__":
     main()
